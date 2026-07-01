@@ -8,8 +8,10 @@ const URGENT_TIME_THRESHOLD: int = 1
 const MAX_TIME_LIMIT: int = 9
 const CORRECT_REVEAL_DURATION: float = 1.0
 const LEVEL_BANNER_DURATION: float = 1.45
-const PHONE_UI_FONT_SCALE: float = 1.35
-const PHONE_UI_SIZE_SCALE: float = 1.2
+const PHONE_UI_FONT_SCALE: float = 1.65
+const PHONE_UI_SIZE_SCALE: float = 1.45
+const PHONE_UI_PORTRAIT_FONT_SCALE: float = 2.0
+const PHONE_UI_PORTRAIT_SIZE_SCALE: float = 1.8
 const SAVE_PATH: String = "user://save.cfg"
 const SAVE_SECTION: String = "progress"
 const SAVE_KEY_HIGH_SCORE: String = "high_score"
@@ -110,7 +112,13 @@ var pending_unlock_round_id: int = -1
 var help_page_index: int = 0
 var game_over_submission_done: bool = false
 var new_best_announced_this_run: bool = false
-var phone_ui_enabled: bool = false
+var current_ui_font_scale: float = 1.0
+var current_ui_size_scale: float = 1.0
+var ui_base_font_sizes: Dictionary = {}
+var ui_base_min_sizes: Dictionary = {}
+var ui_base_sep: Dictionary = {}
+var ui_base_h_sep: Dictionary = {}
+var ui_base_v_sep: Dictionary = {}
 
 var help_pages: Array[Dictionary] = [
 	{
@@ -138,6 +146,7 @@ var cell_panels: Dictionary = {}
 func _ready() -> void:
 	rng.randomize()
 	build_ui()
+	cache_base_ui_metrics(self)
 	apply_device_ui_scaling_if_needed()
 	build_audio()
 	load_progress()
@@ -1149,54 +1158,92 @@ func _notification(what: int) -> void:
 		update_top_overlay_positions()
 
 
-func should_enable_phone_ui() -> bool:
+func is_portrait_phone_layout() -> bool:
+	var viewport_size: Vector2 = get_viewport_rect().size
+	return viewport_size.y > viewport_size.x and viewport_size.x <= 900.0
+
+
+func is_phone_environment() -> bool:
 	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
 		return true
 	if OS.get_name() == "Android" or OS.get_name() == "iOS":
 		return true
-	if DisplayServer.is_touchscreen_available() and get_viewport_rect().size.x <= 1100.0:
+	if is_portrait_phone_layout():
+		return true
+	if DisplayServer.is_touchscreen_available() and get_viewport_rect().size.x <= 1280.0:
 		return true
 	return false
 
 
+func get_target_ui_scales() -> Dictionary:
+	if not is_phone_environment():
+		return {"font": 1.0, "size": 1.0}
+	if is_portrait_phone_layout():
+		return {"font": PHONE_UI_PORTRAIT_FONT_SCALE, "size": PHONE_UI_PORTRAIT_SIZE_SCALE}
+	return {"font": PHONE_UI_FONT_SCALE, "size": PHONE_UI_SIZE_SCALE}
+
+
 func apply_device_ui_scaling_if_needed() -> void:
-	if phone_ui_enabled:
+	var target: Dictionary = get_target_ui_scales()
+	var font_scale: float = float(target.get("font", 1.0))
+	var size_scale: float = float(target.get("size", 1.0))
+	if is_equal_approx(current_ui_font_scale, font_scale) and is_equal_approx(current_ui_size_scale, size_scale):
 		return
-	if not should_enable_phone_ui():
-		return
-	phone_ui_enabled = true
-	scale_controls_for_phone(self)
+	apply_ui_scale_recursive(self, font_scale, size_scale)
+	current_ui_font_scale = font_scale
+	current_ui_size_scale = size_scale
 	if hud_bar != null:
-		hud_bar.offset_left = 12
-		hud_bar.offset_right = -12
+		hud_bar.offset_left = 12 if size_scale > 1.0 else 20
+		hud_bar.offset_right = -12 if size_scale > 1.0 else -20
 	if powerup_bar != null:
-		powerup_bar.offset_left = 12
-		powerup_bar.offset_right = -12
+		powerup_bar.offset_left = 12 if size_scale > 1.0 else 20
+		powerup_bar.offset_right = -12 if size_scale > 1.0 else -20
 	update_board_size()
 	update_top_overlay_positions()
 
 
-func scale_controls_for_phone(node: Node) -> void:
+func cache_base_ui_metrics(node: Node) -> void:
 	if node is Control:
 		var control := node as Control
+		var id: int = control.get_instance_id()
 		if control.has_theme_font_size_override("font_size"):
-			var size_now: int = control.get_theme_font_size("font_size")
-			control.add_theme_font_size_override("font_size", int(round(float(size_now) * PHONE_UI_FONT_SCALE)))
+			ui_base_font_sizes[id] = control.get_theme_font_size("font_size")
 		if control.has_theme_constant_override("separation"):
-			var sep_now: int = control.get_theme_constant("separation")
-			control.add_theme_constant_override("separation", int(round(float(sep_now) * PHONE_UI_SIZE_SCALE)))
+			ui_base_sep[id] = control.get_theme_constant("separation")
 		if control.has_theme_constant_override("h_separation"):
-			var h_sep_now: int = control.get_theme_constant("h_separation")
-			control.add_theme_constant_override("h_separation", int(round(float(h_sep_now) * PHONE_UI_SIZE_SCALE)))
+			ui_base_h_sep[id] = control.get_theme_constant("h_separation")
 		if control.has_theme_constant_override("v_separation"):
-			var v_sep_now: int = control.get_theme_constant("v_separation")
-			control.add_theme_constant_override("v_separation", int(round(float(v_sep_now) * PHONE_UI_SIZE_SCALE)))
+			ui_base_v_sep[id] = control.get_theme_constant("v_separation")
 		var min_size := control.custom_minimum_size
 		if min_size.x > 0.0 or min_size.y > 0.0:
-			control.custom_minimum_size = min_size * PHONE_UI_SIZE_SCALE
+			ui_base_min_sizes[id] = min_size
 
 	for child in node.get_children():
-		scale_controls_for_phone(child)
+		cache_base_ui_metrics(child)
+
+
+func apply_ui_scale_recursive(node: Node, font_scale: float, size_scale: float) -> void:
+	if node is Control:
+		var control := node as Control
+		var id: int = control.get_instance_id()
+		if ui_base_font_sizes.has(id):
+			var base_font: int = int(ui_base_font_sizes[id])
+			control.add_theme_font_size_override("font_size", int(round(float(base_font) * font_scale)))
+		if ui_base_sep.has(id):
+			var base_sep: int = int(ui_base_sep[id])
+			control.add_theme_constant_override("separation", int(round(float(base_sep) * size_scale)))
+		if ui_base_h_sep.has(id):
+			var base_h_sep: int = int(ui_base_h_sep[id])
+			control.add_theme_constant_override("h_separation", int(round(float(base_h_sep) * size_scale)))
+		if ui_base_v_sep.has(id):
+			var base_v_sep: int = int(ui_base_v_sep[id])
+			control.add_theme_constant_override("v_separation", int(round(float(base_v_sep) * size_scale)))
+		if ui_base_min_sizes.has(id):
+			var base_min: Vector2 = ui_base_min_sizes[id]
+			control.custom_minimum_size = base_min * size_scale
+
+	for child in node.get_children():
+		apply_ui_scale_recursive(child, font_scale, size_scale)
 
 
 func update_top_overlay_positions() -> void:
@@ -1204,14 +1251,14 @@ func update_top_overlay_positions() -> void:
 	if powerup_bar != null and powerup_bar.visible:
 		top_anchor = powerup_bar.offset_bottom + 8.0
 
-	var badge_height: float = 52.0 * (PHONE_UI_SIZE_SCALE if phone_ui_enabled else 1.0)
+	var badge_height: float = 52.0 * current_ui_size_scale
 	if status_badge_panel != null:
 		status_badge_panel.offset_top = top_anchor
 		status_badge_panel.offset_bottom = top_anchor + badge_height
 
 	if new_best_flash_label != null:
 		new_best_flash_label.offset_top = top_anchor + badge_height + 8.0
-		new_best_flash_label.offset_bottom = new_best_flash_label.offset_top + (52.0 * (PHONE_UI_SIZE_SCALE if phone_ui_enabled else 1.0))
+		new_best_flash_label.offset_bottom = new_best_flash_label.offset_top + (52.0 * current_ui_size_scale)
 
 
 func update_board_size() -> void:
@@ -1219,14 +1266,17 @@ func update_board_size() -> void:
 		return
 	var viewport_size: Vector2 = get_viewport_rect().size
 	var horizontal_limit: float = viewport_size.x * 0.88
-	var reserved_top: float = 134.0 if (powerup_bar != null and powerup_bar.visible) else 104.0
+	var top_edge: float = hud_bar.offset_bottom if hud_bar != null else 104.0
+	if powerup_bar != null and powerup_bar.visible:
+		top_edge = powerup_bar.offset_bottom
+	var reserved_top: float = top_edge + 14.0
 	var reserved_bottom: float = 20.0
 	var wrap_gap: float = float(board_wrap.get_theme_constant("separation"))
-	var question_height: float = maxf(question_label.get_combined_minimum_size().y, 64.0)
+	var question_height: float = maxf(question_label.get_combined_minimum_size().y, 64.0 * current_ui_size_scale)
 	var vertical_limit: float = viewport_size.y - reserved_top - reserved_bottom - question_height - wrap_gap - 10.0
 	var side: float = clampf(minf(horizontal_limit, vertical_limit), 180.0, 620.0)
 	board_grid.custom_minimum_size = Vector2(side, side)
-	question_label.custom_minimum_size = Vector2(side, 64.0)
+	question_label.custom_minimum_size = Vector2(side, 64.0 * current_ui_size_scale)
 	for panel in cell_panels.values():
 		var item := panel as PanelContainer
 		if item != null:

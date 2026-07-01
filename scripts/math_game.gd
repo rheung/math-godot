@@ -8,6 +8,8 @@ const URGENT_TIME_THRESHOLD: int = 1
 const MAX_TIME_LIMIT: int = 9
 const CORRECT_REVEAL_DURATION: float = 1.0
 const LEVEL_BANNER_DURATION: float = 1.45
+const PHONE_UI_FONT_SCALE: float = 1.35
+const PHONE_UI_SIZE_SCALE: float = 1.2
 const SAVE_PATH: String = "user://save.cfg"
 const SAVE_SECTION: String = "progress"
 const SAVE_KEY_HIGH_SCORE: String = "high_score"
@@ -108,6 +110,7 @@ var pending_unlock_round_id: int = -1
 var help_page_index: int = 0
 var game_over_submission_done: bool = false
 var new_best_announced_this_run: bool = false
+var phone_ui_enabled: bool = false
 
 var help_pages: Array[Dictionary] = [
 	{
@@ -135,6 +138,7 @@ var cell_panels: Dictionary = {}
 func _ready() -> void:
 	rng.randomize()
 	build_ui()
+	apply_device_ui_scaling_if_needed()
 	build_audio()
 	load_progress()
 	update_hud()
@@ -177,11 +181,6 @@ func build_ui() -> void:
 	level_label.add_theme_font_size_override("font_size", 36)
 	level_label.add_theme_color_override("font_color", Color(0.07, 0.11, 0.18))
 	hud_bar.add_child(level_label)
-
-	streak_label = Label.new()
-	streak_label.add_theme_font_size_override("font_size", 36)
-	streak_label.add_theme_color_override("font_color", Color(0.07, 0.11, 0.18))
-	hud_bar.add_child(streak_label)
 
 	time_label = Label.new()
 	time_label.add_theme_font_size_override("font_size", 36)
@@ -286,14 +285,14 @@ func build_ui() -> void:
 
 	new_best_flash_label = Label.new()
 	new_best_flash_label.text = "New best score!"
-	new_best_flash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	new_best_flash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	new_best_flash_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	new_best_flash_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	new_best_flash_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	new_best_flash_label.custom_minimum_size = Vector2(300, 52)
-	new_best_flash_label.offset_left = -320
-	new_best_flash_label.offset_top = 140
-	new_best_flash_label.offset_right = -20
-	new_best_flash_label.offset_bottom = 192
+	new_best_flash_label.offset_left = 140
+	new_best_flash_label.offset_top = 194
+	new_best_flash_label.offset_right = -140
+	new_best_flash_label.offset_bottom = 246
 	new_best_flash_label.add_theme_font_size_override("font_size", 40)
 	new_best_flash_label.add_theme_color_override("font_color", Color(1.0, 0.82, 0.16))
 	new_best_flash_label.visible = false
@@ -344,6 +343,7 @@ func build_ui() -> void:
 	build_help_overlay()
 	build_leaderboard_overlay()
 	update_board_size()
+	update_top_overlay_positions()
 	_on_assist_visibility_toggled(assist_items_visible)
 
 
@@ -1144,7 +1144,74 @@ func make_popup_style() -> StyleBoxFlat:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
+		apply_device_ui_scaling_if_needed()
 		update_board_size()
+		update_top_overlay_positions()
+
+
+func should_enable_phone_ui() -> bool:
+	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
+		return true
+	if OS.get_name() == "Android" or OS.get_name() == "iOS":
+		return true
+	if DisplayServer.is_touchscreen_available() and get_viewport_rect().size.x <= 1100.0:
+		return true
+	return false
+
+
+func apply_device_ui_scaling_if_needed() -> void:
+	if phone_ui_enabled:
+		return
+	if not should_enable_phone_ui():
+		return
+	phone_ui_enabled = true
+	scale_controls_for_phone(self)
+	if hud_bar != null:
+		hud_bar.offset_left = 12
+		hud_bar.offset_right = -12
+	if powerup_bar != null:
+		powerup_bar.offset_left = 12
+		powerup_bar.offset_right = -12
+	update_board_size()
+	update_top_overlay_positions()
+
+
+func scale_controls_for_phone(node: Node) -> void:
+	if node is Control:
+		var control := node as Control
+		if control.has_theme_font_size_override("font_size"):
+			var size_now: int = control.get_theme_font_size("font_size")
+			control.add_theme_font_size_override("font_size", int(round(float(size_now) * PHONE_UI_FONT_SCALE)))
+		if control.has_theme_constant_override("separation"):
+			var sep_now: int = control.get_theme_constant("separation")
+			control.add_theme_constant_override("separation", int(round(float(sep_now) * PHONE_UI_SIZE_SCALE)))
+		if control.has_theme_constant_override("h_separation"):
+			var h_sep_now: int = control.get_theme_constant("h_separation")
+			control.add_theme_constant_override("h_separation", int(round(float(h_sep_now) * PHONE_UI_SIZE_SCALE)))
+		if control.has_theme_constant_override("v_separation"):
+			var v_sep_now: int = control.get_theme_constant("v_separation")
+			control.add_theme_constant_override("v_separation", int(round(float(v_sep_now) * PHONE_UI_SIZE_SCALE)))
+		var min_size := control.custom_minimum_size
+		if min_size.x > 0.0 or min_size.y > 0.0:
+			control.custom_minimum_size = min_size * PHONE_UI_SIZE_SCALE
+
+	for child in node.get_children():
+		scale_controls_for_phone(child)
+
+
+func update_top_overlay_positions() -> void:
+	var top_anchor: float = hud_bar.offset_bottom + 8.0 if hud_bar != null else 98.0
+	if powerup_bar != null and powerup_bar.visible:
+		top_anchor = powerup_bar.offset_bottom + 8.0
+
+	var badge_height: float = 52.0 * (PHONE_UI_SIZE_SCALE if phone_ui_enabled else 1.0)
+	if status_badge_panel != null:
+		status_badge_panel.offset_top = top_anchor
+		status_badge_panel.offset_bottom = top_anchor + badge_height
+
+	if new_best_flash_label != null:
+		new_best_flash_label.offset_top = top_anchor + badge_height + 8.0
+		new_best_flash_label.offset_bottom = new_best_flash_label.offset_top + (52.0 * (PHONE_UI_SIZE_SCALE if phone_ui_enabled else 1.0))
 
 
 func update_board_size() -> void:
@@ -1165,6 +1232,7 @@ func update_board_size() -> void:
 		if item != null:
 			item.custom_minimum_size = Vector2(side / 3.0 - 6.0, side / 3.0 - 6.0)
 	position_correct_hint_label()
+	update_top_overlay_positions()
 
 
 func position_correct_hint_label() -> void:
@@ -1717,6 +1785,7 @@ func _on_assist_visibility_toggled(pressed: bool) -> void:
 		return
 	powerup_bar.visible = pressed and (welcome_overlay == null or not welcome_overlay.visible) and (options_overlay == null or not options_overlay.visible)
 	update_board_size()
+	update_top_overlay_positions()
 	update_hud()
 	save_progress()
 
@@ -1899,7 +1968,6 @@ func update_hud() -> void:
 		high_score_label.text = "Best: %d (%s)" % [high_score, best_player_name]
 	chances_label.text = "Chances: %d" % chances
 	level_label.text = "Level: %d" % level
-	streak_label.text = "Streak: %d" % streak
 	time_label.text = "Time: %d" % round_time_left
 	hint_button.text = "Hint (%d)" % hint_uses
 	slow_button.text = "+2s (%d)" % slow_uses

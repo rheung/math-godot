@@ -1158,19 +1158,41 @@ func _notification(what: int) -> void:
 		update_top_overlay_positions()
 
 
+func _is_portrait_size(size: Vector2, max_phone_width: float = 900.0) -> bool:
+	return size.x > 0.0 and size.y > size.x and size.x <= max_phone_width
+
+
 func is_portrait_phone_layout() -> bool:
 	var viewport_size: Vector2 = get_viewport_rect().size
-	return viewport_size.y > viewport_size.x and viewport_size.x <= 900.0
+	if _is_portrait_size(viewport_size):
+		return true
+
+	var window_size: Vector2 = DisplayServer.window_get_size()
+	if _is_portrait_size(window_size):
+		return true
+
+	var screen_size: Vector2 = DisplayServer.screen_get_size()
+	if _is_portrait_size(screen_size):
+		return true
+
+	return false
 
 
 func is_phone_environment() -> bool:
+	var viewport_size: Vector2 = get_viewport_rect().size
+	var window_size: Vector2 = DisplayServer.window_get_size()
+	var screen_size: Vector2 = DisplayServer.screen_get_size()
+
 	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
 		return true
 	if OS.get_name() == "Android" or OS.get_name() == "iOS":
 		return true
 	if is_portrait_phone_layout():
 		return true
-	if DisplayServer.is_touchscreen_available() and get_viewport_rect().size.x <= 1280.0:
+	if DisplayServer.is_touchscreen_available() and (viewport_size.x <= 1280.0 or window_size.x <= 1280.0 or screen_size.x <= 1280.0):
+		return true
+	# Web exports can report desktop-like viewport sizes even on phones.
+	if OS.has_feature("web") and (window_size.x <= 900.0 or screen_size.x <= 900.0):
 		return true
 	return false
 

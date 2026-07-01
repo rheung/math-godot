@@ -12,6 +12,7 @@ const PHONE_UI_FONT_SCALE: float = 1.65
 const PHONE_UI_SIZE_SCALE: float = 1.45
 const PHONE_UI_PORTRAIT_FONT_SCALE: float = 2.2
 const PHONE_UI_PORTRAIT_SIZE_SCALE: float = 2.0
+const FORCE_PHONE_UI_OVERRIDE: bool = true
 const SAVE_PATH: String = "user://save.cfg"
 const SAVE_SECTION: String = "progress"
 const SAVE_KEY_HIGH_SCORE: String = "high_score"
@@ -1198,6 +1199,8 @@ func is_phone_environment() -> bool:
 
 
 func get_target_ui_scales() -> Dictionary:
+	if FORCE_PHONE_UI_OVERRIDE:
+		return {"font": PHONE_UI_PORTRAIT_FONT_SCALE, "size": PHONE_UI_PORTRAIT_SIZE_SCALE}
 	if not is_phone_environment():
 		return {"font": 1.0, "size": 1.0}
 	if is_portrait_phone_layout():

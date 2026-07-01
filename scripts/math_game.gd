@@ -13,6 +13,15 @@ const SAVE_SECTION: String = "progress"
 const SAVE_KEY_HIGH_SCORE: String = "high_score"
 const SAVE_KEY_QUESTIONS_PER_LEVEL: String = "questions_per_level"
 const SAVE_KEY_ASSIST_VISIBLE: String = "assist_visible"
+const SAVE_KEY_PLAYER_NAME: String = "player_name"
+const SAVE_KEY_BEST_PLAYER_NAME: String = "best_player_name"
+const LEADERBOARD_TABLE_WIDTH: float = 500.0
+const LEADERBOARD_COL_RANK_WIDTH: float = 80.0
+const LEADERBOARD_COL_PLAYER_WIDTH: float = 220.0
+const LEADERBOARD_COL_SCORE_WIDTH: float = 140.0
+const LEADERBOARD_HEADER_BG := Color(0.82, 0.88, 0.96, 1.0)
+const LEADERBOARD_ROW_BG_EVEN := Color(0.95, 0.97, 1.0, 1.0)
+const LEADERBOARD_ROW_BG_ODD := Color(0.89, 0.93, 0.98, 1.0)
 
 var rng := RandomNumberGenerator.new()
 
@@ -31,6 +40,8 @@ var consecutive_misses: int = 0
 var assist_rounds_left: int = 0
 var questions_per_level: int = 10
 var assist_items_visible: bool = false
+var leaderboard_player_name: String = "Player"
+var best_player_name: String = ""
 var hint_uses: int = 1
 var slow_uses: int = 1
 var shield_uses: int = 1
@@ -44,6 +55,7 @@ var streak_label: Label
 var time_label: Label
 var question_label: Label
 var correct_hint_label: Label
+var new_best_flash_label: Label
 var status_badge_panel: PanelContainer
 var status_badge_label: Label
 var assist_toggle_button: CheckBox
@@ -60,10 +72,18 @@ var help_overlay: ColorRect
 var help_title_label: Label
 var help_body_label: Label
 var help_page_label: Label
+var leaderboard_overlay: ColorRect
+var leaderboard_status_label: Label
+var leaderboard_table_empty_label: Label
+var leaderboard_rows_grid: GridContainer
 var level_banner_overlay: ColorRect
 var level_banner_label: Label
 var game_over_overlay: ColorRect
 var game_over_label: Label
+var game_over_leaderboard_status_label: Label
+var game_over_name_row: HBoxContainer
+var game_over_name_input: LineEdit
+var game_over_submit_button: Button
 var board_grid: GridContainer
 var board_wrap: VBoxContainer
 
@@ -73,10 +93,12 @@ var tick_sfx_player: AudioStreamPlayer
 var urgent_tick_sfx_player: AudioStreamPlayer
 var assist_item_sfx_player: AudioStreamPlayer
 var combo_bonus_sfx_player: AudioStreamPlayer
+var new_best_sfx_player: AudioStreamPlayer
 var round_timer: Timer
 var round_unlock_fallback_timer: Timer
 var time_pulse_tween: Tween
 var status_badge_tween: Tween
+var new_best_flash_tween: Tween
 
 var round_time_left: int = ROUND_TIME_LIMIT
 var round_time_limit: int = ROUND_TIME_LIMIT
@@ -84,6 +106,8 @@ var round_id: int = 0
 var last_banner_level_shown: int = -1
 var pending_unlock_round_id: int = -1
 var help_page_index: int = 0
+var game_over_submission_done: bool = false
+var new_best_announced_this_run: bool = false
 
 var help_pages: Array[Dictionary] = [
 	{
@@ -115,6 +139,7 @@ func _ready() -> void:
 	load_progress()
 	update_hud()
 	show_welcome_screen()
+	await sync_best_score_from_leaderboard()
 
 
 func build_ui() -> void:
@@ -259,6 +284,23 @@ func build_ui() -> void:
 	status_badge_label.add_theme_color_override("font_color", Color(0.98, 0.99, 1.0))
 	status_badge_panel.add_child(status_badge_label)
 
+	new_best_flash_label = Label.new()
+	new_best_flash_label.text = "New best score!"
+	new_best_flash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	new_best_flash_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	new_best_flash_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	new_best_flash_label.custom_minimum_size = Vector2(300, 52)
+	new_best_flash_label.offset_left = -320
+	new_best_flash_label.offset_top = 140
+	new_best_flash_label.offset_right = -20
+	new_best_flash_label.offset_bottom = 192
+	new_best_flash_label.add_theme_font_size_override("font_size", 40)
+	new_best_flash_label.add_theme_color_override("font_color", Color(1.0, 0.82, 0.16))
+	new_best_flash_label.visible = false
+	new_best_flash_label.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	new_best_flash_label.z_index = 32
+	add_child(new_best_flash_label)
+
 	board_grid = GridContainer.new()
 	board_grid.columns = 3
 	board_grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -300,6 +342,7 @@ func build_ui() -> void:
 	build_welcome_overlay()
 	build_options_overlay()
 	build_help_overlay()
+	build_leaderboard_overlay()
 	update_board_size()
 	_on_assist_visibility_toggled(assist_items_visible)
 
@@ -330,6 +373,34 @@ func build_game_over_overlay() -> void:
 	game_over_label.add_theme_font_size_override("font_size", 34)
 	game_over_label.add_theme_color_override("font_color", Color(0.07, 0.11, 0.18))
 	content.add_child(game_over_label)
+
+	game_over_leaderboard_status_label = Label.new()
+	game_over_leaderboard_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	game_over_leaderboard_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	game_over_leaderboard_status_label.custom_minimum_size = Vector2(320, 42)
+	game_over_leaderboard_status_label.add_theme_font_size_override("font_size", 22)
+	game_over_leaderboard_status_label.add_theme_color_override("font_color", Color(0.10, 0.18, 0.31))
+	content.add_child(game_over_leaderboard_status_label)
+
+	game_over_name_row = HBoxContainer.new()
+	game_over_name_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	game_over_name_row.add_theme_constant_override("separation", 8)
+	game_over_name_row.visible = false
+	content.add_child(game_over_name_row)
+
+	game_over_name_input = LineEdit.new()
+	game_over_name_input.custom_minimum_size = Vector2(180, 42)
+	game_over_name_input.placeholder_text = "Name (max 10)"
+	game_over_name_input.max_length = 10
+	game_over_name_input.add_theme_font_size_override("font_size", 22)
+	game_over_name_row.add_child(game_over_name_input)
+
+	game_over_submit_button = Button.new()
+	game_over_submit_button.text = "Submit"
+	game_over_submit_button.custom_minimum_size = Vector2(110, 42)
+	game_over_submit_button.add_theme_font_size_override("font_size", 22)
+	game_over_submit_button.pressed.connect(_on_game_over_submit_pressed)
+	game_over_name_row.add_child(game_over_submit_button)
 
 	var restart_button := Button.new()
 	restart_button.text = "Play Again"
@@ -372,6 +443,10 @@ func build_audio() -> void:
 	combo_bonus_sfx_player = AudioStreamPlayer.new()
 	combo_bonus_sfx_player.stream = create_tone_stream(1120.0, 0.16, 0.30)
 	add_child(combo_bonus_sfx_player)
+
+	new_best_sfx_player = AudioStreamPlayer.new()
+	new_best_sfx_player.stream = load("res://audio/freesound_community-success-fanfare-trumpets-6185.mp3") as AudioStream
+	add_child(new_best_sfx_player)
 
 
 func build_round_timer() -> void:
@@ -476,6 +551,13 @@ func build_welcome_overlay() -> void:
 	help_button.pressed.connect(_on_open_help_pressed)
 	content.add_child(help_button)
 
+	var leaderboard_button := Button.new()
+	leaderboard_button.text = "Leaderboard"
+	leaderboard_button.custom_minimum_size = Vector2(260, 56)
+	leaderboard_button.add_theme_font_size_override("font_size", 30)
+	leaderboard_button.pressed.connect(_on_open_leaderboard_pressed)
+	content.add_child(leaderboard_button)
+
 
 func build_options_overlay() -> void:
 	options_overlay = ColorRect.new()
@@ -537,8 +619,8 @@ func build_options_overlay() -> void:
 	qpl_row.add_child(qpl_label)
 
 	questions_per_level_spinbox = SpinBox.new()
-	questions_per_level_spinbox.min_value = 3
-	questions_per_level_spinbox.max_value = 12
+	questions_per_level_spinbox.min_value = 1
+	questions_per_level_spinbox.max_value = 100
 	questions_per_level_spinbox.step = 1
 	questions_per_level_spinbox.rounded = true
 	questions_per_level_spinbox.value = questions_per_level
@@ -627,6 +709,83 @@ func build_help_overlay() -> void:
 	content.add_child(back_button)
 
 
+func build_leaderboard_overlay() -> void:
+	leaderboard_overlay = ColorRect.new()
+	leaderboard_overlay.color = Color(0.06, 0.10, 0.18, 0.88)
+	leaderboard_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	leaderboard_overlay.visible = false
+	add_child(leaderboard_overlay)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	leaderboard_overlay.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(620, 560)
+	panel.add_theme_stylebox_override("panel", make_popup_style())
+	center.add_child(panel)
+
+	var content := VBoxContainer.new()
+	content.alignment = BoxContainer.ALIGNMENT_BEGIN
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content.add_theme_constant_override("separation", 8)
+	panel.add_child(content)
+
+	var header_grid := GridContainer.new()
+	header_grid.columns = 3
+	header_grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	header_grid.custom_minimum_size = Vector2(LEADERBOARD_TABLE_WIDTH, 36)
+	header_grid.add_theme_constant_override("h_separation", 10)
+	content.add_child(header_grid)
+
+	var rank_header := make_leaderboard_cell("Rank", HORIZONTAL_ALIGNMENT_LEFT, 24, LEADERBOARD_COL_RANK_WIDTH, LEADERBOARD_HEADER_BG)
+	header_grid.add_child(rank_header)
+
+	var player_header := make_leaderboard_cell("Player", HORIZONTAL_ALIGNMENT_LEFT, 24, LEADERBOARD_COL_PLAYER_WIDTH, LEADERBOARD_HEADER_BG)
+	header_grid.add_child(player_header)
+
+	var score_header := make_leaderboard_cell("Score", HORIZONTAL_ALIGNMENT_RIGHT, 24, LEADERBOARD_COL_SCORE_WIDTH, LEADERBOARD_HEADER_BG)
+	header_grid.add_child(score_header)
+
+	leaderboard_rows_grid = GridContainer.new()
+	leaderboard_rows_grid.columns = 3
+	leaderboard_rows_grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	leaderboard_rows_grid.custom_minimum_size = Vector2(LEADERBOARD_TABLE_WIDTH, 340)
+	leaderboard_rows_grid.add_theme_constant_override("h_separation", 10)
+	leaderboard_rows_grid.add_theme_constant_override("v_separation", 6)
+	content.add_child(leaderboard_rows_grid)
+
+	leaderboard_table_empty_label = Label.new()
+	leaderboard_table_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	leaderboard_table_empty_label.add_theme_font_size_override("font_size", 24)
+	leaderboard_table_empty_label.add_theme_color_override("font_color", Color(0.12, 0.20, 0.33))
+	leaderboard_table_empty_label.text = "No scores loaded yet."
+	content.add_child(leaderboard_table_empty_label)
+
+	var nav_spacer := Control.new()
+	nav_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content.add_child(nav_spacer)
+
+	var nav_row := HBoxContainer.new()
+	nav_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	nav_row.add_theme_constant_override("separation", 12)
+	content.add_child(nav_row)
+
+	var refresh_button := Button.new()
+	refresh_button.text = "Refresh"
+	refresh_button.custom_minimum_size = Vector2(170, 50)
+	refresh_button.add_theme_font_size_override("font_size", 26)
+	refresh_button.pressed.connect(_on_refresh_leaderboard_pressed)
+	nav_row.add_child(refresh_button)
+
+	var back_button := Button.new()
+	back_button.text = "Back"
+	back_button.custom_minimum_size = Vector2(170, 50)
+	back_button.add_theme_font_size_override("font_size", 26)
+	back_button.pressed.connect(_on_leaderboard_back_pressed)
+	nav_row.add_child(back_button)
+
+
 func show_welcome_screen() -> void:
 	input_locked = true
 	stop_round_countdown()
@@ -637,6 +796,8 @@ func show_welcome_screen() -> void:
 		options_overlay.visible = false
 	if help_overlay != null:
 		help_overlay.visible = false
+	if leaderboard_overlay != null:
+		leaderboard_overlay.visible = false
 	if game_over_overlay != null:
 		game_over_overlay.visible = false
 	set_gameplay_visible(false)
@@ -649,6 +810,8 @@ func show_options_screen() -> void:
 		options_overlay.visible = true
 	if help_overlay != null:
 		help_overlay.visible = false
+	if leaderboard_overlay != null:
+		leaderboard_overlay.visible = false
 	if assist_toggle_button != null:
 		assist_toggle_button.button_pressed = assist_items_visible
 	if questions_per_level_spinbox != null:
@@ -662,8 +825,146 @@ func show_help_screen() -> void:
 		options_overlay.visible = false
 	if help_overlay != null:
 		help_overlay.visible = true
+	if leaderboard_overlay != null:
+		leaderboard_overlay.visible = false
 	help_page_index = 0
 	refresh_help_page()
+
+
+func show_leaderboard_screen() -> void:
+	if welcome_overlay != null:
+		welcome_overlay.visible = false
+	if options_overlay != null:
+		options_overlay.visible = false
+	if help_overlay != null:
+		help_overlay.visible = false
+	if leaderboard_overlay != null:
+		leaderboard_overlay.visible = true
+	refresh_leaderboard()
+
+
+func refresh_leaderboard() -> void:
+	clear_leaderboard_rows()
+	if leaderboard_table_empty_label != null:
+		leaderboard_table_empty_label.visible = true
+		leaderboard_table_empty_label.text = "Loading top 10..."
+
+	if not Global.silentwolf_ready():
+		if leaderboard_table_empty_label != null:
+			leaderboard_table_empty_label.text = "Set API key and Game ID in Global, then reopen leaderboard."
+		return
+
+	var ld_name: String = Global.leaderboard_name if "leaderboard_name" in Global else "main"
+	var sw_result: Dictionary = await SilentWolf.Scores.get_scores(10, ld_name).sw_get_scores_complete
+	if not sw_result.get("success", false):
+		if leaderboard_table_empty_label != null:
+			leaderboard_table_empty_label.text = str(sw_result.get("error", "Unknown error"))
+		return
+
+	var scores: Array = sw_result.get("scores", [])
+	if not scores.is_empty():
+		var top_row: Dictionary = scores[0] as Dictionary
+		var top_score: int = int(top_row.get("score", 0))
+		var top_player_name: String = str(top_row.get("player_name", ""))
+		if top_score != high_score or top_player_name != best_player_name:
+			high_score = top_score
+			best_player_name = top_player_name
+			save_progress()
+			update_hud()
+	if leaderboard_rows_grid != null:
+		for i in range(scores.size()):
+			var row: Dictionary = scores[i]
+			var player_name: String = str(row.get("player_name", "Player"))
+			var player_score: int = int(row.get("score", 0))
+			var row_bg: Color = LEADERBOARD_ROW_BG_EVEN if i % 2 == 0 else LEADERBOARD_ROW_BG_ODD
+
+			var rank_label := make_leaderboard_cell(str(i + 1), HORIZONTAL_ALIGNMENT_LEFT, 22, LEADERBOARD_COL_RANK_WIDTH, row_bg)
+			leaderboard_rows_grid.add_child(rank_label)
+
+			var player_label := make_leaderboard_cell(player_name, HORIZONTAL_ALIGNMENT_LEFT, 22, LEADERBOARD_COL_PLAYER_WIDTH, row_bg)
+			leaderboard_rows_grid.add_child(player_label)
+
+			var score_label := make_leaderboard_cell(str(player_score), HORIZONTAL_ALIGNMENT_RIGHT, 22, LEADERBOARD_COL_SCORE_WIDTH, row_bg)
+			leaderboard_rows_grid.add_child(score_label)
+
+	if scores.is_empty() and leaderboard_table_empty_label != null:
+		leaderboard_table_empty_label.visible = true
+		leaderboard_table_empty_label.text = "No scores yet. Be the first one!"
+	elif leaderboard_table_empty_label != null:
+		leaderboard_table_empty_label.visible = false
+		leaderboard_table_empty_label.text = ""
+
+
+func clear_leaderboard_rows() -> void:
+	if leaderboard_rows_grid == null:
+		return
+	for child in leaderboard_rows_grid.get_children():
+		child.queue_free()
+
+
+func make_leaderboard_cell(text_value: String, alignment: HorizontalAlignment, font_size: int, width: float, bg_color: Color) -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(width, 30)
+	var style := StyleBoxFlat.new()
+	style.bg_color = bg_color
+	style.corner_radius_top_left = 4
+	style.corner_radius_top_right = 4
+	style.corner_radius_bottom_right = 4
+	style.corner_radius_bottom_left = 4
+	panel.add_theme_stylebox_override("panel", style)
+
+	var cell := Label.new()
+	cell.text = text_value
+	cell.horizontal_alignment = alignment
+	cell.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cell.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	cell.clip_text = true
+	cell.add_theme_font_size_override("font_size", font_size)
+	cell.add_theme_color_override("font_color", Color(0.07, 0.11, 0.18))
+	panel.add_child(cell)
+
+	return panel
+
+
+func submit_score_to_leaderboard(player_name: String, score_value: int) -> void:
+	if score_value <= 0:
+		return
+	if not Global.silentwolf_ready():
+		return
+	if player_name.is_empty():
+		player_name = "Player"
+
+	var ld_name: String = Global.leaderboard_name if "leaderboard_name" in Global else "main"
+	var sw_result: Dictionary = await SilentWolf.Scores.save_score(player_name, score_value, ld_name).sw_save_score_complete
+	if sw_result.get("success", false):
+		await sync_best_score_from_leaderboard()
+	if leaderboard_status_label != null:
+		leaderboard_status_label.text = "Score submitted!" if sw_result.get("success", false) else "Score submit failed"
+
+
+func sync_best_score_from_leaderboard() -> void:
+	if not Global.silentwolf_ready():
+		return
+
+	var ld_name: String = Global.leaderboard_name if "leaderboard_name" in Global else "main"
+	var sw_result: Dictionary = await SilentWolf.Scores.get_scores(1, ld_name).sw_get_scores_complete
+	if not sw_result.get("success", false):
+		return
+
+	var scores: Array = sw_result.get("scores", [])
+	var top_score: int = 0
+	var top_player_name: String = ""
+	if not scores.is_empty():
+		var top_row: Dictionary = scores[0] as Dictionary
+		top_score = int(top_row.get("score", 0))
+		top_player_name = str(top_row.get("player_name", ""))
+
+	if top_score != high_score or top_player_name != best_player_name:
+		high_score = top_score
+		best_player_name = top_player_name
+		save_progress()
+		update_hud()
 
 
 func refresh_help_page() -> void:
@@ -703,6 +1004,7 @@ func begin_new_game() -> void:
 	round_time_left = ROUND_TIME_LIMIT
 	last_banner_level_shown = -1
 	pending_unlock_round_id = -1
+	new_best_announced_this_run = false
 	if welcome_overlay != null:
 		welcome_overlay.visible = false
 	if options_overlay != null:
@@ -723,6 +1025,10 @@ func _on_open_options_pressed() -> void:
 
 func _on_open_help_pressed() -> void:
 	show_help_screen()
+
+
+func _on_open_leaderboard_pressed() -> void:
+	show_leaderboard_screen()
 
 
 func _on_options_back_pressed() -> void:
@@ -748,6 +1054,42 @@ func _on_help_back_pressed() -> void:
 		help_overlay.visible = false
 	if welcome_overlay != null:
 		welcome_overlay.visible = true
+
+
+func _on_refresh_leaderboard_pressed() -> void:
+	await refresh_leaderboard()
+
+
+func _on_leaderboard_back_pressed() -> void:
+	if leaderboard_overlay != null:
+		leaderboard_overlay.visible = false
+	if welcome_overlay != null:
+		welcome_overlay.visible = true
+	save_progress()
+
+
+func _on_game_over_submit_pressed() -> void:
+	if game_over_submission_done:
+		return
+	if game_over_name_input == null:
+		return
+
+	var entered_name: String = game_over_name_input.text.strip_edges().substr(0, 10)
+	if entered_name.is_empty():
+		if game_over_leaderboard_status_label != null:
+			game_over_leaderboard_status_label.text = "Name is required (max 10, no spaces-only)."
+		game_over_name_input.grab_focus()
+		return
+
+	leaderboard_player_name = entered_name
+	save_progress()
+
+	if game_over_submit_button != null:
+		game_over_submit_button.disabled = true
+	await submit_score_to_leaderboard(leaderboard_player_name, score)
+	game_over_submission_done = true
+	if game_over_leaderboard_status_label != null:
+		game_over_leaderboard_status_label.text = "Score saved to top 10!"
 
 
 func create_tone_stream(frequency: float, duration_sec: float, amplitude: float) -> AudioStreamWAV:
@@ -1380,7 +1722,7 @@ func _on_assist_visibility_toggled(pressed: bool) -> void:
 
 
 func _on_questions_per_level_changed(value: float) -> void:
-	questions_per_level = int(value)
+	questions_per_level = clampi(int(value), 1, 100)
 	save_progress()
 
 
@@ -1405,7 +1747,57 @@ func show_status_badge(message: String) -> void:
 func update_high_score_if_needed() -> void:
 	if score > high_score:
 		high_score = score
+		best_player_name = "New Player"
+		if not new_best_announced_this_run:
+			new_best_announced_this_run = true
+			play_new_best_celebration()
 		save_progress()
+
+
+func play_new_best_celebration() -> void:
+	if new_best_sfx_player != null and new_best_sfx_player.stream != null:
+		new_best_sfx_player.play()
+	show_new_best_flash()
+
+
+func show_new_best_flash() -> void:
+	if new_best_flash_label == null:
+		return
+	if new_best_flash_tween != null and new_best_flash_tween.is_running():
+		new_best_flash_tween.kill()
+
+	new_best_flash_label.visible = true
+	new_best_flash_label.modulate = Color(1.0, 1.0, 1.0, 1.0)
+	new_best_flash_label.scale = Vector2.ONE
+	var rainbow_colors: Array[Color] = [
+		Color(1.0, 0.24, 0.24),
+		Color(1.0, 0.64, 0.20),
+		Color(1.0, 0.90, 0.24),
+		Color(0.25, 0.90, 0.28),
+		Color(0.24, 0.72, 1.0),
+		Color(0.53, 0.40, 1.0),
+		Color(1.0, 0.33, 0.84),
+	]
+	new_best_flash_tween = create_tween()
+	for color in rainbow_colors:
+		new_best_flash_tween.tween_callback(Callable(self, "_set_new_best_flash_color").bind(color))
+		new_best_flash_tween.tween_property(new_best_flash_label, "modulate:a", 0.38, 0.08)
+		new_best_flash_tween.tween_property(new_best_flash_label, "modulate:a", 1.0, 0.08)
+		new_best_flash_tween.tween_property(new_best_flash_label, "scale", Vector2(1.12, 1.12), 0.08).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		new_best_flash_tween.tween_property(new_best_flash_label, "scale", Vector2.ONE, 0.08).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	new_best_flash_tween.tween_interval(0.3)
+	new_best_flash_tween.tween_property(new_best_flash_label, "modulate:a", 0.0, 0.2)
+	new_best_flash_tween.tween_callback(func() -> void:
+		new_best_flash_label.visible = false
+		new_best_flash_label.scale = Vector2.ONE
+		_set_new_best_flash_color(Color(1.0, 0.82, 0.16))
+	)
+
+
+func _set_new_best_flash_color(color: Color) -> void:
+	if new_best_flash_label == null:
+		return
+	new_best_flash_label.add_theme_color_override("font_color", color)
 
 
 func load_progress() -> void:
@@ -1415,11 +1807,16 @@ func load_progress() -> void:
 		high_score = 0
 		questions_per_level = 10
 		assist_items_visible = false
+		leaderboard_player_name = "Player"
 		return
 	high_score = int(cfg.get_value(SAVE_SECTION, SAVE_KEY_HIGH_SCORE, 0))
 	questions_per_level = int(cfg.get_value(SAVE_SECTION, SAVE_KEY_QUESTIONS_PER_LEVEL, 10))
-	questions_per_level = clampi(questions_per_level, 3, 12)
+	questions_per_level = clampi(questions_per_level, 1, 100)
 	assist_items_visible = bool(cfg.get_value(SAVE_SECTION, SAVE_KEY_ASSIST_VISIBLE, false))
+	leaderboard_player_name = str(cfg.get_value(SAVE_SECTION, SAVE_KEY_PLAYER_NAME, "Player"))
+	best_player_name = str(cfg.get_value(SAVE_SECTION, SAVE_KEY_BEST_PLAYER_NAME, ""))
+	if leaderboard_player_name.is_empty():
+		leaderboard_player_name = "Player"
 	if assist_toggle_button != null:
 		assist_toggle_button.button_pressed = assist_items_visible
 
@@ -1429,6 +1826,8 @@ func save_progress() -> void:
 	cfg.set_value(SAVE_SECTION, SAVE_KEY_HIGH_SCORE, high_score)
 	cfg.set_value(SAVE_SECTION, SAVE_KEY_QUESTIONS_PER_LEVEL, questions_per_level)
 	cfg.set_value(SAVE_SECTION, SAVE_KEY_ASSIST_VISIBLE, assist_items_visible)
+	cfg.set_value(SAVE_SECTION, SAVE_KEY_PLAYER_NAME, leaderboard_player_name)
+	cfg.set_value(SAVE_SECTION, SAVE_KEY_BEST_PLAYER_NAME, best_player_name)
 	cfg.save(SAVE_PATH)
 
 
@@ -1494,7 +1893,10 @@ func flash_feedback(index: int, is_correct: bool) -> void:
 
 func update_hud() -> void:
 	score_label.text = "Score: %d" % score
-	high_score_label.text = "Best: %d" % high_score
+	if best_player_name.is_empty():
+		high_score_label.text = "Best: %d" % high_score
+	else:
+		high_score_label.text = "Best: %d (%s)" % [high_score, best_player_name]
 	chances_label.text = "Chances: %d" % chances
 	level_label.text = "Level: %d" % level
 	streak_label.text = "Streak: %d" % streak
@@ -1576,8 +1978,57 @@ func show_game_over() -> void:
 	for i in GRID_INDEXES:
 		var button := answer_buttons[i] as Button
 		button.disabled = true
+	game_over_submission_done = false
 	game_over_label.text = "Game Over\nFinal Score: %d" % score
+	if game_over_leaderboard_status_label != null:
+		game_over_leaderboard_status_label.text = "Checking leaderboard..."
+	if game_over_name_row != null:
+		game_over_name_row.visible = false
+	if game_over_name_input != null:
+		game_over_name_input.max_length = 10
+		game_over_name_input.text = ""
+	if game_over_submit_button != null:
+		game_over_submit_button.disabled = false
 	game_over_overlay.visible = true
+	await prepare_game_over_leaderboard_prompt()
+
+
+func prepare_game_over_leaderboard_prompt() -> void:
+	if score <= 0:
+		if game_over_leaderboard_status_label != null:
+			game_over_leaderboard_status_label.text = ""
+		return
+
+	if not Global.silentwolf_ready():
+		if game_over_leaderboard_status_label != null:
+			game_over_leaderboard_status_label.text = ""
+		return
+
+	var ld_name: String = Global.leaderboard_name if "leaderboard_name" in Global else "main"
+	var sw_result: Dictionary = await SilentWolf.Scores.get_scores(10, ld_name).sw_get_scores_complete
+	if not sw_result.get("success", false):
+		if game_over_leaderboard_status_label != null:
+			game_over_leaderboard_status_label.text = ""
+		return
+
+	var scores: Array = sw_result.get("scores", [])
+	var qualifies: bool = false
+	if scores.size() < 10:
+		qualifies = true
+	else:
+		var cutoff: int = int((scores[scores.size() - 1] as Dictionary).get("score", 0))
+		qualifies = score > cutoff
+
+	if qualifies:
+		if game_over_leaderboard_status_label != null:
+			game_over_leaderboard_status_label.text = "New Top 10! Enter a name (max 10)."
+		if game_over_name_row != null:
+			game_over_name_row.visible = true
+		if game_over_name_input != null:
+			game_over_name_input.grab_focus()
+	else:
+		if game_over_leaderboard_status_label != null:
+			game_over_leaderboard_status_label.text = ""
 
 
 func _on_restart_pressed() -> void:

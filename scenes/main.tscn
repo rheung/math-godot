@@ -1,8 +1,8 @@
-[gd_scene load_steps=2 format=3 uid="uid://brq0o6f48tmnc"]
+[gd_scene format=3 uid="uid://brq0o6f48tmnc"]
 
-[ext_resource type="Script" path="res://scripts/math_game.gd" id="1_8g5xv"]
+[ext_resource type="Script" uid="uid://c11vk1fmuwg26" path="res://scripts/math_game.gd" id="1_8g5xv"]
 
-[node name="Main" type="Control"]
+[node name="Main" type="Control" unique_id=1287607000]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0

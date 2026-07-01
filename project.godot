@@ -18,6 +18,8 @@ config/icon="res://icon.svg"
 [autoload]
 
 _mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
+SilentWolf="*uid://d0fmtrwki4lmn"
+Global="*uid://cabnyue5b5cib"
 
 [display]
 
@@ -26,7 +28,7 @@ window/stretch/aspect="expand"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")
+enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg", "res://addons/silent_wolf/plugin.cfg")
 
 [physics]
 
